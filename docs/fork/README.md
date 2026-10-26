@@ -1,6 +1,7 @@
 # vello fork docs
 
-This fork of [vello](https://github.com/linebender/vello) exists for one change, used by the
+This fork of [vello](https://github.com/linebender/vello) exists to make the compute renderer
+small enough for a desktop shell, used by the
 [amane](https://github.com/098765434/amane) fork and the
 [amane-shell](https://github.com/098765434/amane-shell) desktop. It is branch `ocbk` on top of
 tag `v0.11.0`, which is what crates.io's `vello 0.11.0` and `vello_encoding 0.11.0` were published
@@ -62,18 +63,39 @@ left fits in half the side with at most half the area used, repacking as it goes
 sees the new size, frees the old texture and uploads the survivors again. Covered by
 `retired_entries_free_the_atlas_and_shrink_it` in the crate's tests.
 
+## A scratch pool that lets go
+
+`research/vello_research/src/wgpu_engine.rs`'s `ResourcePool` hands every run its scratch
+buffers and scene uploads and takes them back afterwards, keyed by size class, usage and name.
+Upstream keeps all of them for the renderer's lifetime: the scratch set (29 MB in the fork) sits
+on the GPU while nothing draws, and a scene that was once large leaves a buffer behind in every
+size class it passed through.
+
+The fork does two things:
+
+- Each buffer given back is stamped with the run, and buffers no run took again for 60 runs
+  (`RETIRE_AFTER_RUNS`) are dropped at the end of a run. The scratch set every run takes is
+  never that old; the stragglers of a large scene are.
+- `Renderer::release_scratch()` drops the whole pool. The shaders and the image atlas stay, so
+  the next run only allocates. A shell calls it after some seconds without a run (amane:
+  `AMANE_VELLO_IDLE`, 30 s by default) and polls the device once, since wgpu frees dropped
+  buffers only on a poll.
+
 ## Using it
 
-Both `amane` and `amane-shell` patch the crate from their root manifests (a `[patch.crates-io]`
-only applies from the root workspace, and amane is a git dependency of the shell):
+Both `amane` and `amane-shell` patch both crates from their root manifests (a
+`[patch.crates-io]` only applies from the root workspace, and amane is a git dependency of the
+shell):
 
 ```toml
 [patch.crates-io]
+vello = { git = "https://github.com/098765434/vello", branch = "ocbk" }
 vello_encoding = { git = "https://github.com/098765434/vello", branch = "ocbk" }
 ```
 
-The nix builds need the fork's content hash in `cargoLock.outputHashes`
-(`vello_encoding-0.11.0`); the first build prints the expected `sha256-…` on mismatch.
+The nix builds need the fork's content hash in `cargoLock.outputHashes`, once per crate
+(`vello-0.11.0` and `vello_encoding-0.11.0`, the same hash since they come from the same
+checkout); the first build prints the expected `sha256-…` on mismatch.
 
 ## Maintaining
 

@@ -604,6 +604,19 @@ impl Renderer {
         self.override_image(&handle, None);
     }
 
+    /// Free the scratch buffers kept between renders.
+    ///
+    /// Every render takes its bump-allocated scratch buffers and scene uploads
+    /// from a pool that otherwise keeps them for the renderer's lifetime, which
+    /// is tens of MB of GPU memory while nothing is drawn. The next render
+    /// allocates them again; the shaders and the image atlas stay. wgpu frees
+    /// what was dropped on the next device poll.
+    ///
+    /// Fork addition; see `docs/fork/README.md`.
+    pub fn release_scratch(&mut self) {
+        self.engine.release_pool();
+    }
+
     /// Reload the shaders. This should only be used during `vello` development
     #[cfg(feature = "hot_reload")]
     #[doc(hidden)] // End-users of Vello should not have `hot_reload` enabled.

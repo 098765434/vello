@@ -118,9 +118,23 @@ struct BufferProperties {
     name: &'static str,
 }
 
+/// A buffer the pool holds between runs, and the run that gave it back.
+struct PooledBuffer {
+    buffer: Buffer,
+    freed_at: u64,
+}
+
+/// Buffers a run gave back and no later run took again are dropped once this
+/// many runs have passed. A scene that was once large leaves its upload sizes
+/// behind otherwise, since every size class keeps its own buffers for the
+/// renderer's lifetime. The scratch buffers every run takes are never this old.
+const RETIRE_AFTER_RUNS: u64 = 60;
+
 #[derive(Default)]
 struct ResourcePool {
-    bufs: HashMap<BufferProperties, Vec<Buffer>>,
+    bufs: HashMap<BufferProperties, Vec<PooledBuffer>>,
+    /// How many recordings have run; stamps what they give back.
+    run: u64,
 }
 
 /// The transient bind map contains short-lifetime resources.
@@ -755,18 +769,15 @@ impl WgpuEngine {
         #[cfg(feature = "wgpu-profiler")]
         profiler.resolve_queries(&mut encoder);
         queue.submit(Some(encoder.finish()));
+        self.pool.run += 1;
         for id in free_bufs {
             if let Some(buf) = self.bind_map.buf_map.remove(&id)
                 && let MaterializedBuffer::Gpu(gpu_buf) = buf.buffer
             {
-                let props = BufferProperties {
-                    size: gpu_buf.size(),
-                    usages: gpu_buf.usage(),
-                    name: buf.label,
-                };
-                self.pool.bufs.entry(props).or_default().push(gpu_buf);
+                self.pool.give_back(gpu_buf, buf.label);
             }
         }
+        self.pool.retire_unused();
         for id in free_images {
             if let Some((texture, _view)) = self.bind_map.image_map.remove(&id) {
                 // TODO: have a pool to avoid needless re-allocation
@@ -774,6 +785,11 @@ impl WgpuEngine {
             }
         }
         Ok(())
+    }
+
+    /// Let go of the buffers kept between runs; the next run makes them again.
+    pub fn release_pool(&mut self) {
+        self.pool.clear();
     }
 
     pub fn get_download(&self, buf: BufferProxy) -> Option<&Buffer> {
@@ -987,9 +1003,9 @@ impl ResourcePool {
             name,
         };
         if let Some(buf_vec) = self.bufs.get_mut(&props)
-            && let Some(buf) = buf_vec.pop()
+            && let Some(pooled) = buf_vec.pop()
         {
-            return buf;
+            return pooled.buffer;
         }
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(name),
@@ -997,6 +1013,33 @@ impl ResourcePool {
             usage,
             mapped_at_creation: false,
         })
+    }
+
+    /// Keep a buffer a run has finished with, for a later run of the same size.
+    fn give_back(&mut self, buffer: Buffer, name: &'static str) {
+        let props = BufferProperties {
+            size: buffer.size(),
+            usages: buffer.usage(),
+            name,
+        };
+        self.bufs.entry(props).or_default().push(PooledBuffer {
+            buffer,
+            freed_at: self.run,
+        });
+    }
+
+    /// Drop the buffers no run has taken for [`RETIRE_AFTER_RUNS`] runs.
+    fn retire_unused(&mut self) {
+        let run = self.run;
+        self.bufs.retain(|_, bufs| {
+            bufs.retain(|pooled| run - pooled.freed_at <= RETIRE_AFTER_RUNS);
+            !bufs.is_empty()
+        });
+    }
+
+    /// Drop every buffer held between runs.
+    fn clear(&mut self) {
+        self.bufs.clear();
     }
 
     /// Quantize a size up to the nearest size class.
