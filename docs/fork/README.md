@@ -47,6 +47,21 @@ partial. Two ways to check a scene's headroom:
   `AMANE_FRAMES=1`. (vello's `bump_estimate` feature gives a CPU-side bound instead, but it
   overshoots stroked scenes by 10×.)
 
+## An image atlas that shrinks
+
+`research/vello_encoding/src/image_cache.rs` keeps every image a scene draws in one square
+atlas texture that doubles as needed, up to 8192² (256 MB). Upstream evicts an image only when a
+new one doesn't fit, and the atlas keeps the largest size it ever grew to. amane's blur copies
+and `draw_image` pictures go through it (a full-output blur copy forces 4096², two of them
+8192²), so a shell paid for them long after the surface that drew them hid.
+
+The fork retires images unused for 120 resolve passes at the start of each pass
+(`RETIRE_AFTER_GENERATIONS`, far above upstream's 2-pass eviction so an image one window draws
+every few passes isn't uploaded again and again), and then halves the atlas while everything
+left fits in half the side with at most half the area used, repacking as it goes. The renderer
+sees the new size, frees the old texture and uploads the survivors again. Covered by
+`retired_entries_free_the_atlas_and_shrink_it` in the crate's tests.
+
 ## Using it
 
 Both `amane` and `amane-shell` patch the crate from their root manifests (a `[patch.crates-io]`
