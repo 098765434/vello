@@ -10,6 +10,17 @@ const DEFAULT_ATLAS_SIZE: i32 = 1024;
 const MAX_ATLAS_SIZE: i32 = 8192;
 const EVICT_AFTER_GENERATIONS: u64 = 2;
 
+/*
+ * Fork (098765434/vello, branch ocbk): upstream only evicts when an image
+ * doesn't fit, and the atlas keeps the largest size it ever grew to (256 MB
+ * at 8192²), so a shell paid for its launcher's icons and its full-output
+ * blur copies long after the launcher closed. Each resolve pass now also
+ * evicts images unused for this many passes, and the atlas shrinks to what
+ * is left. Far more than EVICT_AFTER_GENERATIONS, so an image drawn every
+ * few passes by one window isn't uploaded again and again.
+ */
+const RETIRE_AFTER_GENERATIONS: u64 = 120;
+
 #[derive(Default)]
 pub struct Images<'a> {
     /// Width of the square image atlas texture.
@@ -38,6 +49,8 @@ pub(crate) struct ImageCache {
     atlas: AtlasAllocator,
     /// Maximum side length for the square image atlas texture.
     max_size: i32,
+    /// The side length the atlas started with, which shrinking never goes below.
+    min_size: i32,
     /// Monotonic counter for resolve passes, used to track when resident images were last used.
     generation: u64,
     /// Number of resident images evicted during the current resolve pass.
@@ -66,6 +79,7 @@ impl ImageCache {
         Self {
             atlas: AtlasAllocator::new(size2(initial_size, initial_size)),
             max_size,
+            min_size: initial_size,
             generation: 0,
             evicted_in_resolve: 0,
             map: HashMap::default(),
@@ -77,6 +91,51 @@ impl ImageCache {
         self.generation = self.generation.wrapping_add(1);
         self.evicted_in_resolve = 0;
         self.images.clear();
+        self.retire_stale_entries();
+    }
+
+    /// Evicts images unused for `RETIRE_AFTER_GENERATIONS` passes, and shrinks the atlas to
+    /// the smallest power-of-two size that holds what is left with room to spare.
+    fn retire_stale_entries(&mut self) {
+        let Some(stale_before) = self.generation.checked_sub(RETIRE_AFTER_GENERATIONS) else {
+            return;
+        };
+        let mut retired = 0;
+        for (_id, resident) in self
+            .map
+            .extract_if(|_, resident| resident.last_used_generation < stale_before)
+        {
+            self.atlas.deallocate(resident.alloc_id);
+            retired += 1;
+        }
+        if retired == 0 {
+            return;
+        }
+        self.evicted_in_resolve += retired;
+        self.shrink();
+    }
+
+    /// Halves the atlas while everything resident fits in half the side with at most half
+    /// the area used, repacking as it goes; the renderer sees the new size and uploads again.
+    fn shrink(&mut self) {
+        loop {
+            let half = self.atlas.size().width / 2;
+            if half < self.min_size {
+                return;
+            }
+            let fits = self.map.values().all(|resident| {
+                resident.image.width <= half as u32 && resident.image.height <= half as u32
+            });
+            let area: u64 = self
+                .map
+                .values()
+                .map(|resident| u64::from(resident.image.width) * u64::from(resident.image.height))
+                .sum();
+            let roomy = area * 2 <= (half as u64) * (half as u64);
+            if !fits || !roomy || !self.repack_to_size(half) {
+                return;
+            }
+        }
     }
 
     pub(crate) fn restart_resolve_pass(&mut self) {
@@ -230,6 +289,38 @@ mod tests {
         assert_eq!(cache.atlas.size().width, 32);
         cache.begin_resolve();
         assert_eq!(cache.atlas.size().width, 32);
+    }
+
+    #[test]
+    fn retired_entries_free_the_atlas_and_shrink_it() {
+        let mut cache = ImageCache::new_with_sizes(16, 64);
+        let big = image(1, 24, 24);
+        let small = image(2, 4, 4);
+
+        cache.begin_resolve();
+        assert!(cache.get_or_insert(&big).is_none());
+        assert!(cache.bump_size());
+        assert_eq!(cache.atlas.size().width, 32);
+        assert!(cache.get_or_insert(&big).is_some());
+        assert!(cache.get_or_insert(&small).is_some());
+        cache.finish_resolve();
+
+        // the small one stays in use, the big one is left alone until it is retired
+        for _ in 0..RETIRE_AFTER_GENERATIONS {
+            cache.begin_resolve();
+            assert!(cache.get_or_insert(&small).is_some());
+            cache.finish_resolve();
+            assert_eq!(cache.map.len(), 2);
+            assert_eq!(cache.atlas.size().width, 32);
+        }
+
+        cache.begin_resolve();
+        assert_eq!(cache.map.len(), 1);
+        assert_eq!(cache.evicted_in_resolve, 1);
+        assert_eq!(cache.atlas.size().width, 16);
+        // the survivor was repacked, so it is uploaded again at its new place
+        assert!(cache.get_or_insert(&small).is_some());
+        assert_eq!(cache.images.len(), 1);
     }
 
     #[test]
