@@ -31,8 +31,9 @@ The fork sizes them for a shell's scenes:
 About 29 MB a set instead of 165. Measured on amane's examples (2026-10-26, read back from the
 GPU), the heaviest scene is `canvas`, a stroked clock face and spirograph at 1216×320: 36k lines,
 37k segments, 940 tiles. `blur_shapes` at full output (2881×1769) takes 11.7k tiles and 3.1k
-segments. Each limit is 3–7× above the largest value seen. amane's `gradient` example went from
-193 MB to 65 MB of VRAM.
+segments. The amane-shell desktop itself (widgets, launcher, Quick Settings, bar, dock; 231 runs)
+peaks at 38.7k tiles, 104k ptcl entries, 3.5k segments and 1.1k lines. Each limit is 3–7× above
+the largest value seen. amane's `gradient` example went from 193 MB to 65 MB of VRAM.
 
 **An overflow is silent.** The shaders set `BumpAllocators::failed`, coarse and fine
 rasterisation exit early, and `render_to_texture` still returns `Ok`: the run comes out blank or
