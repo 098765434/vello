@@ -22,13 +22,17 @@ The fork sizes them for a shell's scenes:
 |---|---|---|---|
 | `bin_data` | 2¹⁸ | 2¹⁸ | 1 MB |
 | `tiles` | 2²¹ | 2¹⁸ | 2 MB |
-| `lines` | 2²¹ | 2¹⁷ | 3 MB |
+| `lines` | 2²¹ | 2¹⁸ | 6 MB |
 | `seg_counts` | 2²¹ | 2¹⁸ | 2 MB |
 | `segments` | 2²¹ | 2¹⁸ | 6 MB |
 | `blend_spill` | 2²⁰ | 2²⁰ | 4 MB |
 | `ptcl` | 2²³ | 2²¹ | 8 MB |
 
-About 26 MB a set instead of 165.
+About 29 MB a set instead of 165. Measured on amane's examples (2026-10-26, read back from the
+GPU), the heaviest scene is `canvas`, a stroked clock face and spirograph at 1216×320: 36k lines,
+37k segments, 940 tiles. `blur_shapes` at full output (2881×1769) takes 11.7k tiles and 3.1k
+segments. Each limit is 3–7× above the largest value seen. amane's `gradient` example went from
+193 MB to 65 MB of VRAM.
 
 **An overflow is silent.** The shaders set `BumpAllocators::failed`, coarse and fine
 rasterisation exit early, and `render_to_texture` still returns `Ok`: the run comes out blank or
@@ -36,9 +40,11 @@ partial. Two ways to check a scene's headroom:
 
 - `VELLO_SCRATCH=upstream` in the environment restores upstream's sizes without a rebuild. If a
   blank run fills in, the scene overflowed.
-- vello's `bump_estimate` cargo feature adds `Scene::bump_estimate`, a CPU-side estimate of
-  what a scene needs, as a `BumpAllocatorMemory`. amane logs it per vello run under
-  `AMANE_FRAMES=1` when built with its `vello-stats` feature.
+- vello's `debug_layers` cargo feature makes `render_to_texture_async` read the `BumpAllocators`
+  counters back from the GPU: `failed`, plus what the run took of each buffer. amane's
+  `vello-stats` feature draws that way and prints a `scratch …` line per vello run under
+  `AMANE_FRAMES=1`. (vello's `bump_estimate` feature gives a CPU-side bound instead, but it
+  overshoots stroked scenes by 10×.)
 
 ## Using it
 

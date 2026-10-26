@@ -17,16 +17,17 @@ const TILE_HEIGHT: u32 = 16;
  * sized for a desktop shell, not for paris-30k. Upstream's sizes come to about
  * 165 MB a set, and the renderer's pool keeps every set it ever made, so a
  * shell paid some 360 MB of GPU memory for a few hundred paths a frame. These
- * come to about 26 MB a set.
+ * come to about 29 MB a set; the heaviest shell scene measured (a stroked
+ * clock face, 36k lines) stays 3-7x under each of them.
  *
  * An overflow is silent: the shaders set `BumpAllocators::failed` and the run
  * comes out blank. If a scene ever does, `VELLO_SCRATCH=upstream` restores the
- * upstream sizes without a rebuild, and vello's `bump_estimate` feature says
- * what a scene needs.
+ * upstream sizes without a rebuild, and the `debug_layers` feature reads back
+ * what a scene took (amane's `vello-stats` feature prints it).
  */
 const SHELL_BIN_DATA: u32 = 1 << 18;
 const SHELL_TILES: u32 = 1 << 18;
-const SHELL_LINES: u32 = 1 << 17;
+const SHELL_LINES: u32 = 1 << 18;
 const SHELL_SEG_COUNTS: u32 = 1 << 18;
 const SHELL_SEGMENTS: u32 = 1 << 18;
 const SHELL_BLEND_SPILL: u32 = 1 << 20;
